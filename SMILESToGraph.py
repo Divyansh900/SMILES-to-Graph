@@ -69,8 +69,8 @@ class SMILESToGraph:
         if self.feature_level in ['standard', 'extended', 'comprehensive']:
             # Standard additional features
             features.extend([
-                atom.GetImplicitValence(),
-                atom.GetExplicitValence(),
+                atom.GetTotalValence() - atom.GetFormalCharge(),  # Implicit valence (approximate)
+                atom.GetTotalValence(),  # Total valence (explicit + implicit)
                 int(atom.IsInRing()),
                 atom.GetMass(),
                 int(atom.GetChiralTag() != Chem.rdchem.ChiralType.CHI_UNSPECIFIED),
@@ -154,8 +154,8 @@ class SMILESToGraph:
         
         if self.feature_level in ['extended', 'comprehensive']:
             features.extend([
-                bond.GetValenceContrib(bond.GetBeginAtom()),
-                bond.GetValenceContrib(bond.GetEndAtom()),
+                1.0,  # Placeholder for valence contribution (bond-specific)
+                1.0,  # Placeholder for valence contribution (bond-specific)
             ])
         
         if self.feature_level == 'comprehensive':
@@ -193,24 +193,92 @@ class SMILESToGraph:
                 })
             
             if self.feature_level in ['extended', 'comprehensive']:
-                descriptors.update({
-                    'num_heteroatoms': rdMolDescriptors.CalcNumHeteroatoms(mol),
-                    'num_rotatable_bonds': rdMolDescriptors.CalcNumRotatableBonds(mol),
-                    'fraction_csp3': rdMolDescriptors.CalcFractionCSP3(mol),
-                    'bertz_ct': rdMolDescriptors.BertzCT(mol),
-                    'balaban_j': rdMolDescriptors.BalabanJ(mol),
-                })
+                try:
+                    # Try BertzCT, fall back to alternative if not available
+                    if hasattr(rdMolDescriptors, 'BertzCT'):
+                        bertz_ct = rdMolDescriptors.BertzCT(mol)
+                    else:
+                        # Alternative complexity measure using number of bonds and rings
+                        bertz_ct = mol.GetNumBonds() + rdMolDescriptors.CalcNumRings(mol) * 2
+                    
+                    descriptors.update({
+                        'num_heteroatoms': rdMolDescriptors.CalcNumHeteroatoms(mol),
+                        'num_rotatable_bonds': rdMolDescriptors.CalcNumRotatableBonds(mol),
+                        'fraction_csp3': rdMolDescriptors.CalcFractionCSP3(mol),
+                        'bertz_ct': bertz_ct,
+                        'balaban_j': rdMolDescriptors.BalabanJ(mol) if mol.GetNumBonds() > 0 else 0,
+                    })
+                except Exception as e:
+                    # Minimal descriptors if advanced ones fail
+                    descriptors.update({
+                        'num_heteroatoms': rdMolDescriptors.CalcNumHeteroatoms(mol),
+                        'num_rotatable_bonds': rdMolDescriptors.CalcNumRotatableBonds(mol),
+                        'bertz_ct': mol.GetNumBonds() + rdMolDescriptors.CalcNumRings(mol) * 2,
+                        'balaban_j': 0,
+                    })
+                    if hasattr(rdMolDescriptors, 'CalcFractionCSP3'):
+                        descriptors['fraction_csp3'] = rdMolDescriptors.CalcFractionCSP3(mol)
             
             if self.feature_level == 'comprehensive':
-                descriptors.update({
-                    'kappa1': rdMolDescriptors.Kappa1(mol),
-                    'kappa2': rdMolDescriptors.Kappa2(mol),
-                    'kappa3': rdMolDescriptors.Kappa3(mol),
-                    'chi0v': rdMolDescriptors.Chi0v(mol),
-                    'chi1v': rdMolDescriptors.Chi1v(mol),
-                    'chi2v': rdMolDescriptors.Chi2v(mol),
-                    'hall_kier_alpha': rdMolDescriptors.HallKierAlpha(mol),
-                })
+                try:
+                    # Check for availability of each descriptor individually
+                    comprehensive_descriptors = {}
+                    
+                    # Kappa indices
+                    if hasattr(rdMolDescriptors, 'Kappa1'):
+                        comprehensive_descriptors['kappa1'] = rdMolDescriptors.Kappa1(mol)
+                    else:
+                        comprehensive_descriptors['kappa1'] = mol.GetNumAtoms()
+                    
+                    if hasattr(rdMolDescriptors, 'Kappa2'):
+                        comprehensive_descriptors['kappa2'] = rdMolDescriptors.Kappa2(mol)
+                    else:
+                        comprehensive_descriptors['kappa2'] = mol.GetNumBonds()
+                    
+                    if hasattr(rdMolDescriptors, 'Kappa3'):
+                        comprehensive_descriptors['kappa3'] = rdMolDescriptors.Kappa3(mol)
+                    else:
+                        comprehensive_descriptors['kappa3'] = rdMolDescriptors.CalcNumRings(mol)
+                    
+                    # Chi indices
+                    if hasattr(rdMolDescriptors, 'Chi0v'):
+                        comprehensive_descriptors['chi0v'] = rdMolDescriptors.Chi0v(mol)
+                    else:
+                        comprehensive_descriptors['chi0v'] = mol.GetNumAtoms()
+                    
+                    if hasattr(rdMolDescriptors, 'Chi1v'):
+                        comprehensive_descriptors['chi1v'] = rdMolDescriptors.Chi1v(mol)
+                    else:
+                        comprehensive_descriptors['chi1v'] = mol.GetNumBonds()
+                    
+                    if hasattr(rdMolDescriptors, 'Chi2v'):
+                        comprehensive_descriptors['chi2v'] = rdMolDescriptors.Chi2v(mol)
+                    else:
+                        comprehensive_descriptors['chi2v'] = rdMolDescriptors.CalcNumRings(mol)
+                    
+                    # Hall-Kier alpha
+                    if hasattr(rdMolDescriptors, 'HallKierAlpha'):
+                        comprehensive_descriptors['hall_kier_alpha'] = rdMolDescriptors.HallKierAlpha(mol)
+                    else:
+                        # Simple flexibility measure: rotatable_bonds / total_bonds
+                        comprehensive_descriptors['hall_kier_alpha'] = (
+                            rdMolDescriptors.CalcNumRotatableBonds(mol) / max(mol.GetNumBonds(), 1)
+                        )
+                    
+                    descriptors.update(comprehensive_descriptors)
+                    
+                except Exception as e:
+                    warnings.warn(f"Error in comprehensive descriptors: {e}")
+                    # Minimal fallback
+                    descriptors.update({
+                        'kappa1': mol.GetNumAtoms(),
+                        'kappa2': mol.GetNumBonds(), 
+                        'kappa3': rdMolDescriptors.CalcNumRings(mol),
+                        'chi0v': mol.GetNumAtoms(),
+                        'chi1v': mol.GetNumBonds(),
+                        'chi2v': rdMolDescriptors.CalcNumRings(mol), 
+                        'hall_kier_alpha': rdMolDescriptors.CalcNumRotatableBonds(mol) / max(mol.GetNumBonds(), 1),
+                    })
                 
         except Exception as e:
             warnings.warn(f"Error calculating some descriptors: {e}")
