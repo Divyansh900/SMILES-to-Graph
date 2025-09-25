@@ -1,3 +1,11 @@
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors, Descriptors, Crippen, Lipinski
+from rdkit.Chem.rdPartialCharges import ComputeGasteigerCharges
+from rdkit.Chem.rdMolDescriptors import CalcTPSA, CalcNumHBD, CalcNumHBA
+from typing import Dict, List, Optional, Tuple, Union
+import warnings
+
 class SMILESToGraph:
     """
     Enhanced SMILES to graph converter with configurable feature levels.
@@ -131,7 +139,7 @@ class SMILESToGraph:
             'graph_features': graph_count
         }
     
-    def get_all_feature_shapes(self) -> Dict[str, Dict[str, int]]:
+    def get_feature_shapes(self) -> Dict[str, Dict[str, int]]:
         """
         Get feature shapes for all feature levels.
         
@@ -484,12 +492,13 @@ class SMILESToGraph:
         
         return descriptors
     
-    def to_graph(self, smiles: str) -> Optional[Dict]:
+    def to_graph(self, smiles: str, normalize_descriptors: str = None) -> Optional[Dict]:
         """
         Convert SMILES to graph representation.
         
         Args:
             smiles: SMILES string
+            normalize_descriptors: Normalization method for descriptors - 'standardize', 'minmax', or None
             
         Returns:
             Dictionary containing:
@@ -542,6 +551,10 @@ class SMILESToGraph:
         
         # Get molecular descriptors
         descriptors = self._get_molecular_descriptors(mol)
+        
+        # Normalize descriptors if requested
+        if normalize_descriptors and descriptors:
+            descriptors = self._normalize_descriptors(descriptors, normalize_descriptors)
         
         # Metadata
         metadata = {
@@ -599,3 +612,24 @@ class SMILESToGraph:
             atom_names.extend(['x', 'y', 'z'])
         
         return atom_names, bond_names
+
+
+# -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Example usage and convenience functions
+
+
+def create_converter(feature_level: str = "standard", **kwargs) -> SMILESToGraph:
+    """Create a preconfigured converter."""
+    return SMILESToGraph(feature_level=feature_level, **kwargs)
+
+def quick_convert(smiles: str, feature_level: str = "standard") -> Optional[Dict]:
+    """Quick conversion with default settings."""
+    converter = SMILESToGraph(feature_level=feature_level)
+    return converter.to_graph(smiles)
+
+def get_descriptors_only(smiles: Union[str, List[str]], 
+                        feature_level: str = "standard", 
+                        normalize: str = None) -> Optional[Union[Dict, List[Dict]]]:
+    """Quick extraction of molecular descriptors only."""
+    converter = SMILESToGraph(feature_level=feature_level)
+    return converter.get_descriptor_features(smiles, normalize)
