@@ -1,11 +1,3 @@
-import numpy as np
-from rdkit import Chem
-from rdkit.Chem import rdMolDescriptors, Descriptors, Crippen, Lipinski
-from rdkit.Chem.rdPartialCharges import ComputeGasteigerCharges
-from rdkit.Chem.rdMolDescriptors import CalcTPSA, CalcNumHBD, CalcNumHBA
-from typing import Dict, List, Optional, Tuple
-import warnings
-
 class SMILESToGraph:
     """
     Enhanced SMILES to graph converter with configurable feature levels.
@@ -50,6 +42,213 @@ class SMILESToGraph:
         valid_levels = ['basic', 'standard', 'extended', 'comprehensive']
         if self.feature_level not in valid_levels:
             raise ValueError(f"feature_level must be one of {valid_levels}")
+            
+        # Predefined normalization constants (empirical values from ChEMBL/ZINC datasets)
+        self._descriptor_norms = {
+            'mol_weight': {'mean': 350.0, 'std': 150.0, 'min': 50.0, 'max': 1000.0},
+            'logp': {'mean': 2.5, 'std': 2.0, 'min': -5.0, 'max': 10.0},
+            'tpsa': {'mean': 70.0, 'std': 40.0, 'min': 0.0, 'max': 300.0},
+            'hbd': {'mean': 2.0, 'std': 2.0, 'min': 0.0, 'max': 15.0},
+            'hba': {'mean': 4.0, 'std': 3.0, 'min': 0.0, 'max': 20.0},
+            'num_atoms': {'mean': 25.0, 'std': 10.0, 'min': 5.0, 'max': 100.0},
+            'num_bonds': {'mean': 26.0, 'std': 11.0, 'min': 4.0, 'max': 110.0},
+            'num_rings': {'mean': 2.0, 'std': 1.5, 'min': 0.0, 'max': 8.0},
+            'num_aromatic_rings': {'mean': 1.5, 'std': 1.0, 'min': 0.0, 'max': 6.0},
+            'num_saturated_rings': {'mean': 0.5, 'std': 1.0, 'min': 0.0, 'max': 5.0},
+            'num_heteroatoms': {'mean': 4.0, 'std': 3.0, 'min': 0.0, 'max': 20.0},
+            'num_rotatable_bonds': {'mean': 5.0, 'std': 4.0, 'min': 0.0, 'max': 25.0},
+            'fraction_csp3': {'mean': 0.3, 'std': 0.25, 'min': 0.0, 'max': 1.0},
+            'bertz_ct': {'mean': 500.0, 'std': 300.0, 'min': 50.0, 'max': 2000.0},
+            'balaban_j': {'mean': 1.5, 'std': 0.5, 'min': 0.0, 'max': 4.0},
+            'kappa1': {'mean': 15.0, 'std': 8.0, 'min': 3.0, 'max': 50.0},
+            'kappa2': {'mean': 8.0, 'std': 5.0, 'min': 1.0, 'max': 30.0},
+            'kappa3': {'mean': 4.0, 'std': 3.0, 'min': 0.0, 'max': 15.0},
+            'chi0v': {'mean': 15.0, 'std': 8.0, 'min': 3.0, 'max': 50.0},
+            'chi1v': {'mean': 8.0, 'std': 5.0, 'min': 1.0, 'max': 30.0},
+            'chi2v': {'mean': 6.0, 'std': 4.0, 'min': 0.0, 'max': 20.0},
+            'hall_kier_alpha': {'mean': 0.0, 'std': 2.0, 'min': -10.0, 'max': 10.0}
+        }
+    
+    def get_feature_shapes(self) -> Dict[str, int]:
+        """
+        Get the number of features for each component at the current feature level.
+        
+        Returns:
+            Dictionary with feature counts for:
+            - node_features: number of atom features
+            - edge_features: number of bond features  
+            - graph_features: number of molecular descriptors
+        """
+        # Calculate atom features count
+        atom_count = 6  # Basic features: atomic_num, formal_charge, hybridization, is_aromatic, degree, total_h
+        
+        if self.feature_level in ['standard', 'extended', 'comprehensive']:
+            atom_count += 6  # implicit_valence, explicit_valence, is_in_ring, mass, is_chiral, total_degree
+            atom_count += len(self.common_atoms)  # One-hot for common atoms
+            atom_count += 20  # Atomic number one-hot (limited to first 20 elements)
+        
+        if self.feature_level in ['extended', 'comprehensive']:
+            atom_count += 10  # Ring features + additional chemical properties
+        
+        if self.feature_level == 'comprehensive':
+            atom_count += 3  # atom_map_num, chirality_possible, cip_code
+        
+        if self.include_partial_charges:
+            atom_count += 1
+        
+        if self.include_3d:
+            atom_count += 3  # x, y, z coordinates
+        
+        # Calculate bond features count
+        bond_count = 5  # Basic: single, double, triple, aromatic, conjugated
+        
+        if self.feature_level in ['standard', 'extended', 'comprehensive']:
+            bond_count += 2  # is_in_ring, has_stereo
+        
+        if self.feature_level in ['extended', 'comprehensive']:
+            bond_count += 2  # valence contributions
+        
+        if self.feature_level == 'comprehensive':
+            bond_count += 2  # has_direction, bond_type_double
+        
+        # Calculate graph features count (molecular descriptors)
+        graph_count = 0
+        if self.include_descriptors:
+            graph_count = 4  # Basic: mol_weight, num_atoms, num_bonds, num_rings
+            
+            if self.feature_level in ['standard', 'extended', 'comprehensive']:
+                graph_count += 6  # logp, tpsa, hbd, hba, num_aromatic_rings, num_saturated_rings
+            
+            if self.feature_level in ['extended', 'comprehensive']:
+                graph_count += 5  # num_heteroatoms, num_rotatable_bonds, fraction_csp3, bertz_ct, balaban_j
+            
+            if self.feature_level == 'comprehensive':
+                graph_count += 7  # kappa1-3, chi0v-2v, hall_kier_alpha
+        
+        return {
+            'node_features': atom_count,
+            'edge_features': bond_count,
+            'graph_features': graph_count
+        }
+    
+    def get_all_feature_shapes(self) -> Dict[str, Dict[str, int]]:
+        """
+        Get feature shapes for all feature levels.
+        
+        Returns:
+            Nested dictionary with feature counts for each level
+        """
+        current_level = self.feature_level
+        current_3d = self.include_3d
+        current_charges = self.include_partial_charges
+        current_descriptors = self.include_descriptors
+        
+        shapes = {}
+        for level in ['basic', 'standard', 'extended', 'comprehensive']:
+            self.feature_level = level
+            shapes[level] = self.get_feature_shapes()
+        
+        # Add variations with optional features
+        self.include_3d = True
+        shapes['with_3d'] = self.get_feature_shapes()
+        
+        self.include_3d = False
+        self.include_partial_charges = True
+        shapes['with_charges'] = self.get_feature_shapes()
+        
+        self.include_partial_charges = True
+        self.include_3d = True
+        shapes['with_3d_and_charges'] = self.get_feature_shapes()
+        
+        # Restore original settings
+        self.feature_level = current_level
+        self.include_3d = current_3d
+        self.include_partial_charges = current_charges
+        self.include_descriptors = current_descriptors
+        
+        return shapes
+    
+    def get_descriptor_features(self, smiles: Union[str, List[str]], 
+                              normalize: str = None) -> Optional[Union[Dict, List[Dict]]]:
+        """
+        Extract only molecular descriptors (graph-level features) from SMILES.
+        
+        Args:
+            smiles: Single SMILES string or list of SMILES strings
+            normalize: Normalization method - 'standardize', 'minmax', or None
+            
+        Returns:
+            Dictionary of descriptors or list of descriptor dictionaries
+        """
+        if isinstance(smiles, str):
+            return self._get_single_descriptors(smiles, normalize)
+        elif isinstance(smiles, list):
+            results = []
+            for smi in smiles:
+                desc = self._get_single_descriptors(smi, normalize)
+                if desc is not None:
+                    results.append(desc)
+            return results if results else None
+        else:
+            raise ValueError("smiles must be string or list of strings")
+    
+    def _get_single_descriptors(self, smiles: str, normalize: str = None) -> Optional[Dict]:
+        """Extract descriptors from a single SMILES string."""
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+        
+        descriptors = self._get_molecular_descriptors(mol)
+        
+        if normalize and descriptors:
+            descriptors = self._normalize_descriptors(descriptors, normalize)
+        
+        return descriptors
+    
+    def _normalize_descriptors(self, descriptors: Dict[str, float], 
+                             method: str = 'standardize') -> Dict[str, float]:
+        """
+        Normalize descriptor values using predefined statistics.
+        
+        Args:
+            descriptors: Dictionary of descriptor values
+            method: 'standardize' (z-score) or 'minmax' (0-1 scaling)
+            
+        Returns:
+            Dictionary of normalized descriptor values
+        """
+        normalized = {}
+        
+        for key, value in descriptors.items():
+            if key in self._descriptor_norms:
+                norms = self._descriptor_norms[key]
+                
+                if method == 'standardize':
+                    # Z-score normalization: (x - mean) / std
+                    normalized[key] = (value - norms['mean']) / norms['std']
+                
+                elif method == 'minmax':
+                    # Min-max normalization: (x - min) / (max - min)
+                    normalized[key] = (value - norms['min']) / (norms['max'] - norms['min'])
+                    # Clip to [0, 1] range
+                    normalized[key] = max(0.0, min(1.0, normalized[key]))
+                
+                else:
+                    normalized[key] = value
+            else:
+                # Keep original value if no normalization constants available
+                normalized[key] = value
+        
+        return normalized
+    
+    def get_normalization_constants(self) -> Dict[str, Dict[str, float]]:
+        """
+        Get predefined normalization constants for descriptors.
+        
+        Returns:
+            Dictionary of normalization constants for each descriptor
+        """
+        return self._descriptor_norms.copy()
     
     def _get_atom_features(self, atom, mol, ring_info=None, partial_charges=None) -> List[float]:
         """Extract atom features based on configuration."""
@@ -400,39 +599,3 @@ class SMILESToGraph:
             atom_names.extend(['x', 'y', 'z'])
         
         return atom_names, bond_names
-
-# Example usage and convenience functions
-def create_converter(feature_level: str = "standard", **kwargs) -> SMILESToGraph:
-    """Create a preconfigured converter."""
-    return SMILESToGraph(feature_level=feature_level, **kwargs)
-
-def quick_convert(smiles: str, feature_level: str = "standard") -> Optional[Dict]:
-    """Quick conversion with default settings."""
-    converter = SMILESToGraph(feature_level=feature_level)
-    return converter.to_graph(smiles)
-
-# Example configurations
-PRESET_CONFIGS = {
-    'drug_discovery': {
-        'feature_level': 'extended',
-        'include_partial_charges': True,
-        'include_descriptors': True,
-        'common_atoms': ['C', 'N', 'O', 'S', 'P', 'F', 'Cl', 'Br']
-    },
-    'reaction_prediction': {
-        'feature_level': 'comprehensive',
-        'include_partial_charges': True,
-        'include_descriptors': False,
-        'common_atoms': ['C', 'N', 'O', 'S', 'P', 'F', 'Cl', 'Br', 'I']
-    },
-    'property_prediction': {
-        'feature_level': 'standard',
-        'include_descriptors': True,
-        'include_partial_charges': False,
-    },
-    'minimal': {
-        'feature_level': 'basic',
-        'include_descriptors': False,
-        'include_partial_charges': False,
-    }
-}
