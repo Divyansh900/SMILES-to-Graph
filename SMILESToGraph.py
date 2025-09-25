@@ -139,7 +139,7 @@ class SMILESToGraph:
             'graph_features': graph_count
         }
     
-    def get_all_feature_shapes(self, level=None) -> Dict[str, int]:
+    def get_all_feature_shapes(self) -> Dict[str, Dict[str, int]]:
         """
         Get feature shapes for all feature levels.
         
@@ -173,8 +173,8 @@ class SMILESToGraph:
         self.include_3d = current_3d
         self.include_partial_charges = current_charges
         self.include_descriptors = current_descriptors
-        out = shapes[level] if level else shape
-        return out
+        
+        return shapes
     
     def get_descriptor_features(self, smiles: Union[str, List[str]], 
                               normalize: str = None) -> Optional[Union[Dict, List[Dict]]]:
@@ -633,5 +633,3 @@ def get_descriptors_only(smiles: Union[str, List[str]],
     """Quick extraction of molecular descriptors only."""
     converter = SMILESToGraph(feature_level=feature_level)
     return converter.get_descriptor_features(smiles, normalize)
-
-
