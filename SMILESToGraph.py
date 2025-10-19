@@ -325,10 +325,20 @@ class SMILESToGraph:
         
         if self.feature_level == 'comprehensive':
             # Comprehensive features
+            # _CIPCode is a string property ('R', 'S', etc.), so we need to encode it
+            cip_code = 0
+            if atom.HasProp('_CIPCode'):
+                cip_str = atom.GetProp('_CIPCode')
+                # Simple encoding: R=1, S=2, other=0
+                if cip_str == 'R':
+                    cip_code = 1
+                elif cip_str == 'S':
+                    cip_code = 2
+            
             features.extend([
                 atom.GetAtomMapNum(),
                 int(atom.HasProp('_ChiralityPossible')),
-                atom.GetUnsignedProp('_CIPCode') if atom.HasProp('_CIPCode') else 0,
+                cip_code,
             ])
         
         # Optional features
@@ -633,3 +643,4 @@ def get_descriptors_only(smiles: Union[str, List[str]],
     """Quick extraction of molecular descriptors only."""
     converter = SMILESToGraph(feature_level=feature_level)
     return converter.get_descriptor_features(smiles, normalize)
+
