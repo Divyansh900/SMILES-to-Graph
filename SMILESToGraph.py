@@ -418,66 +418,88 @@ class SMILESToGraph:
                         # Alternative complexity measure using number of bonds and rings
                         bertz_ct = mol.GetNumBonds() + rdMolDescriptors.CalcNumRings(mol) * 2
                     
+                    balaban = rdMolDescriptors.BalabanJ(mol) if mol.GetNumBonds() > 0 else 0
+                    if np.isnan(balaban):
+                        # For cyclic molecules, estimate from rings; otherwise use connectivity
+                        num_rings = rdMolDescriptors.CalcNumRings(mol)
+                        balaban = 1.0 + (num_rings * 0.5) if num_rings > 0 else 1.0
+                    
+                    fraction_csp3 = rdMolDescriptors.CalcFractionCSP3(mol)
+                    if np.isnan(fraction_csp3):
+                        # No carbons, set to 0
+                        fraction_csp3 = 0.0
+                    
                     descriptors.update({
                         'num_heteroatoms': rdMolDescriptors.CalcNumHeteroatoms(mol),
                         'num_rotatable_bonds': rdMolDescriptors.CalcNumRotatableBonds(mol),
-                        'fraction_csp3': rdMolDescriptors.CalcFractionCSP3(mol),
+                        'fraction_csp3': fraction_csp3,
                         'bertz_ct': bertz_ct,
-                        'balaban_j': rdMolDescriptors.BalabanJ(mol) if mol.GetNumBonds() > 0 else 0,
+                        'balaban_j': balaban,
                     })
                 except Exception as e:
                     # Minimal descriptors if advanced ones fail
+                    fraction_csp3 = rdMolDescriptors.CalcFractionCSP3(mol) if hasattr(rdMolDescriptors, 'CalcFractionCSP3') else 0.0
+                    if np.isnan(fraction_csp3):
+                        fraction_csp3 = 0.0
+                    
                     descriptors.update({
                         'num_heteroatoms': rdMolDescriptors.CalcNumHeteroatoms(mol),
                         'num_rotatable_bonds': rdMolDescriptors.CalcNumRotatableBonds(mol),
+                        'fraction_csp3': fraction_csp3,
                         'bertz_ct': mol.GetNumBonds() + rdMolDescriptors.CalcNumRings(mol) * 2,
                         'balaban_j': 0,
                     })
-                    if hasattr(rdMolDescriptors, 'CalcFractionCSP3'):
-                        descriptors['fraction_csp3'] = rdMolDescriptors.CalcFractionCSP3(mol)
             
             if self.feature_level == 'comprehensive':
                 try:
                     # Check for availability of each descriptor individually
                     comprehensive_descriptors = {}
                     
-                    # Kappa indices
+                    # Kappa indices - use molecular size as fallback
                     if hasattr(rdMolDescriptors, 'Kappa1'):
-                        comprehensive_descriptors['kappa1'] = rdMolDescriptors.Kappa1(mol)
+                        kappa1 = rdMolDescriptors.Kappa1(mol)
+                        comprehensive_descriptors['kappa1'] = mol.GetNumAtoms() if np.isnan(kappa1) else kappa1
                     else:
                         comprehensive_descriptors['kappa1'] = mol.GetNumAtoms()
                     
                     if hasattr(rdMolDescriptors, 'Kappa2'):
-                        comprehensive_descriptors['kappa2'] = rdMolDescriptors.Kappa2(mol)
+                        kappa2 = rdMolDescriptors.Kappa2(mol)
+                        comprehensive_descriptors['kappa2'] = mol.GetNumBonds() if np.isnan(kappa2) else kappa2
                     else:
                         comprehensive_descriptors['kappa2'] = mol.GetNumBonds()
                     
                     if hasattr(rdMolDescriptors, 'Kappa3'):
-                        comprehensive_descriptors['kappa3'] = rdMolDescriptors.Kappa3(mol)
+                        kappa3 = rdMolDescriptors.Kappa3(mol)
+                        comprehensive_descriptors['kappa3'] = rdMolDescriptors.CalcNumRings(mol) if np.isnan(kappa3) else kappa3
                     else:
                         comprehensive_descriptors['kappa3'] = rdMolDescriptors.CalcNumRings(mol)
                     
-                    # Chi indices
+                    # Chi indices - use molecular size as fallback
                     if hasattr(rdMolDescriptors, 'Chi0v'):
-                        comprehensive_descriptors['chi0v'] = rdMolDescriptors.Chi0v(mol)
+                        chi0v = rdMolDescriptors.Chi0v(mol)
+                        comprehensive_descriptors['chi0v'] = mol.GetNumAtoms() if np.isnan(chi0v) else chi0v
                     else:
                         comprehensive_descriptors['chi0v'] = mol.GetNumAtoms()
                     
                     if hasattr(rdMolDescriptors, 'Chi1v'):
-                        comprehensive_descriptors['chi1v'] = rdMolDescriptors.Chi1v(mol)
+                        chi1v = rdMolDescriptors.Chi1v(mol)
+                        comprehensive_descriptors['chi1v'] = mol.GetNumBonds() if np.isnan(chi1v) else chi1v
                     else:
                         comprehensive_descriptors['chi1v'] = mol.GetNumBonds()
                     
                     if hasattr(rdMolDescriptors, 'Chi2v'):
-                        comprehensive_descriptors['chi2v'] = rdMolDescriptors.Chi2v(mol)
+                        chi2v = rdMolDescriptors.Chi2v(mol)
+                        comprehensive_descriptors['chi2v'] = rdMolDescriptors.CalcNumRings(mol) if np.isnan(chi2v) else chi2v
                     else:
                         comprehensive_descriptors['chi2v'] = rdMolDescriptors.CalcNumRings(mol)
                     
-                    # Hall-Kier alpha
+                    # Hall-Kier alpha - use flexibility measure as fallback
                     if hasattr(rdMolDescriptors, 'HallKierAlpha'):
-                        comprehensive_descriptors['hall_kier_alpha'] = rdMolDescriptors.HallKierAlpha(mol)
+                        hall_kier = rdMolDescriptors.HallKierAlpha(mol)
+                        if np.isnan(hall_kier):
+                            hall_kier = rdMolDescriptors.CalcNumRotatableBonds(mol) / max(mol.GetNumBonds(), 1)
+                        comprehensive_descriptors['hall_kier_alpha'] = hall_kier
                     else:
-                        # Simple flexibility measure: rotatable_bonds / total_bonds
                         comprehensive_descriptors['hall_kier_alpha'] = (
                             rdMolDescriptors.CalcNumRotatableBonds(mol) / max(mol.GetNumBonds(), 1)
                         )
@@ -486,7 +508,7 @@ class SMILESToGraph:
                     
                 except Exception as e:
                     warnings.warn(f"Error in comprehensive descriptors: {e}")
-                    # Minimal fallback
+                    # Minimal fallback with guaranteed non-NaN values
                     descriptors.update({
                         'kappa1': mol.GetNumAtoms(),
                         'kappa2': mol.GetNumBonds(), 
@@ -496,7 +518,6 @@ class SMILESToGraph:
                         'chi2v': rdMolDescriptors.CalcNumRings(mol), 
                         'hall_kier_alpha': rdMolDescriptors.CalcNumRotatableBonds(mol) / max(mol.GetNumBonds(), 1),
                     })
-                
         except Exception as e:
             warnings.warn(f"Error calculating some descriptors: {e}")
         
@@ -529,13 +550,22 @@ class SMILESToGraph:
         # Get ring information
         ring_info = mol.GetRingInfo()
         
-        # Calculate partial charges if requested
         partial_charges = None
         if self.include_partial_charges:
             try:
                 ComputeGasteigerCharges(mol)
-                partial_charges = [float(atom.GetProp('_GasteigerCharge')) 
-                                 for atom in mol.GetAtoms()]
+                partial_charges = []
+                for atom in mol.GetAtoms():
+                    charge = float(atom.GetProp('_GasteigerCharge'))
+                    # Replace NaN with empirical charge based on electronegativity
+                    if np.isnan(charge):
+                        # Use simple electronegativity-based heuristic
+                        symbol = atom.GetSymbol()
+                        electroneg_charges = {'O': -0.4, 'N': -0.3, 'S': -0.2, 
+                                            'F': -0.5, 'Cl': -0.3, 'Br': -0.2, 
+                                            'I': -0.1, 'C': 0.0, 'H': 0.1}
+                        charge = electroneg_charges.get(symbol, 0.0)
+                    partial_charges.append(charge)
             except:
                 warnings.warn("Could not compute Gasteiger charges")
                 partial_charges = [0.0] * mol.GetNumAtoms()
@@ -643,4 +673,5 @@ def get_descriptors_only(smiles: Union[str, List[str]],
     """Quick extraction of molecular descriptors only."""
     converter = SMILESToGraph(feature_level=feature_level)
     return converter.get_descriptor_features(smiles, normalize)
+
 
