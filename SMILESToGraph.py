@@ -558,7 +558,7 @@ class SMILESToGraph:
                 for atom in mol.GetAtoms():
                     charge = float(atom.GetProp('_GasteigerCharge'))
                     # Replace NaN with empirical charge based on electronegativity
-                    if np.isnan(charge):
+                    if np.isnan(charge) or np.isinf(charge):
                         # Use simple electronegativity-based heuristic
                         symbol = atom.GetSymbol()
                         electroneg_charges = {'O': -0.4, 'N': -0.3, 'S': -0.2, 
@@ -673,5 +673,6 @@ def get_descriptors_only(smiles: Union[str, List[str]],
     """Quick extraction of molecular descriptors only."""
     converter = SMILESToGraph(feature_level=feature_level)
     return converter.get_descriptor_features(smiles, normalize)
+
 
 
